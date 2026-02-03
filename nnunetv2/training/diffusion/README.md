@@ -14,20 +14,21 @@ nnunetv2/training/diffusion/
 ├── base_diffusion_trainer.py       # Base trainer extending nnUNetTrainer
 ├── schedulers/                      # Different diffusion strategies
 │   ├── ddpm.py                      # ✓ DDPM implementation
-│   ├── ddim.py                      # TODO: Phase 2
-│   ├── flow_matching.py             # TODO: Phase 2/3
-│   └── brownian_bridge.py           # TODO: Phase 2/3
+│   ├── ddim.py                      # ✓ DDIM implementation (Phase 2)
+│   ├── flow_matching.py             # TODO: Phase 3
+│   └── brownian_bridge.py           # TODO: Phase 3
 ├── noise_schedulers/                # Beta/noise schedules
 │   ├── linear.py                    # ✓ Linear schedule
 │   ├── cosine.py                    # ✓ Cosine schedule
-│   └── sigmoid.py                   # TODO: Phase 2
+│   └── sigmoid.py                   # ✓ Sigmoid schedule (Phase 2)
 ├── conditioning/                    # Conditioning methods
 │   ├── base_conditioning.py         # Abstract base
 │   ├── concat_conditioning.py       # ✓ Channel concatenation
-│   └── cross_attention_conditioning.py  # TODO: Phase 2/3
+│   └── cross_attention_conditioning.py  # TODO: Future
 └── utils/                           # Utility functions
     ├── time_embedding.py            # ✓ Sinusoidal embeddings
-    └── helpers.py                   # ✓ Helper functions
+    ├── helpers.py                   # ✓ Helper functions
+    └── sampling.py                  # ✓ Sampling utilities (Phase 2)
 ```
 
 ## Key Components
@@ -43,9 +44,9 @@ The `DiffusionStrategy` abstract base class defines the interface for all diffus
 
 **Currently Implemented:**
 - **DDPM** (Denoising Diffusion Probabilistic Models): The foundational diffusion strategy with noise prediction
+- **DDIM** (Denoising Diffusion Implicit Models): Deterministic sampling for 10-20x faster inference ✨ NEW
 
 **Coming Soon:**
-- DDIM: Deterministic sampling for faster inference
 - Flow Matching: Optimal transport-based training
 - Brownian Bridge: Direct source-to-target diffusion
 
@@ -55,23 +56,30 @@ Control how noise is added over time:
 
 - **Linear**: Simple linear increase (Ho et al., 2020)
 - **Cosine**: Better for high-resolution images (Nichol & Dhariwal, 2021)
-- **Sigmoid**: TODO - Smoother transitions
+- **Sigmoid**: Smoother transitions with S-curve ✨ NEW
 
 ### 3. Conditioning Methods
 
 How source information is provided to the model:
 
 - **Concat Conditioning**: Simple channel-wise concatenation
-- **Cross-Attention**: TODO - Attention-based conditioning for more flexible integration
 
 ### 4. Time Embeddings
 
 - **SinusoidalTimeEmbedding**: Positional encoding for timesteps
 - **TimeEmbeddingMLP**: MLP to process time information
 
+### 5. Sampling Utilities ✨ NEW
+
+- **ddpm_sample_loop**: Full sampling loop for DDPM
+- **ddim_sample_loop**: Fast sampling loop for DDIM (with timestep skipping)
+- **sample_with_strategy**: Unified interface for both strategies
+- **progressive_sampling**: Save intermediate denoising steps
+- **interpolate_samples**: Interpolate between samples in latent space
+
 ## Usage
 
-### Basic Example
+### Basic Training Example
 
 ```python
 from nnunetv2.training.diffusion import nnUNetDiffusionTrainer
@@ -92,12 +100,77 @@ trainer.initialize()
 trainer.run_training()
 ```
 
-### Using Different Strategies
+### Using DDIM for Faster Inference ✨ NEW
 
 ```python
-# Use cosine schedule for better image quality
+from nnunetv2.training.diffusion import nnUNetDiffusionTrainer
+
+# Train with DDPM (or DDIM - same training process)
 trainer = nnUNetDiffusionTrainer(
     plans=plans,
+    configuration=configuration,
+    fold=fold,
+    dataset_json=dataset_json,
+    diffusion_strategy='ddpm',
+    num_timesteps=1000,
+    beta_schedule='cosine'
+)
+trainer.initialize()
+trainer.run_training()
+
+# Inference with DDIM (10-20x faster!)
+trainer_ddim = nnUNetDiffusionTrainer(
+    plans=plans,
+    configuration=configuration,
+    fold=fold,
+    dataset_json=dataset_json,
+    diffusion_strategy='ddim',  # Use DDIM for inference
+    num_timesteps=1000,
+    beta_schedule='cosine'
+)
+trainer_ddim.initialize()
+# Load trained weights...
+# Run fast inference with only 50 steps instead of 1000!
+```
+
+### Using Different Noise Schedules
+
+```python
+# Linear schedule (simple, stable)
+trainer_linear = nnUNetDiffusionTrainer(..., beta_schedule='linear')
+
+# Cosine schedule (better for high-resolution)
+trainer_cosine = nnUNetDiffusionTrainer(..., beta_schedule='cosine')
+
+# Sigmoid schedule (smooth transitions) ✨ NEW
+trainer_sigmoid = nnUNetDiffusionTrainer(..., beta_schedule='sigmoid')
+```
+
+### Advanced Sampling ✨ NEW
+
+```python
+from nnunetv2.training.diffusion.utils import ddim_sample_loop, sample_with_strategy
+
+# Fast DDIM sampling with only 50 steps
+samples = ddim_sample_loop(
+    model=trainer.network,
+    diffusion_strategy=trainer.diffusion_strategy,
+    shape=(4, 3, 256, 256),
+    conditioning=source_images,
+    num_inference_steps=50,  # Only 50 steps instead of 1000!
+    progress=True
+)
+
+# Or use unified interface
+samples = sample_with_strategy(
+    model=trainer.network,
+    diffusion_strategy=trainer.diffusion_strategy,
+    shape=(4, 3, 256, 256),
+    strategy_name='ddim',  # or 'ddpm'
+    conditioning=source_images,
+    num_inference_steps=50
+)
+```
     configuration=configuration,
     fold=fold,
     dataset_json=dataset_json,
@@ -170,7 +243,7 @@ Where `z ~ N(0, I)` is random noise (except at t=0)
 
 ## References
 
-### Implemented
+### Phase 1 - Implemented
 
 1. **DDPM**: Ho et al. (2020) - "Denoising Diffusion Probabilistic Models"
    - arXiv: 2006.11239
@@ -178,10 +251,13 @@ Where `z ~ N(0, I)` is random noise (except at t=0)
 2. **Cosine Schedule**: Nichol & Dhariwal (2021) - "Improved Denoising Diffusion Probabilistic Models"
    - arXiv: 2102.09672
 
-### Future Work
+### Phase 2 - Implemented ✨
 
 3. **DDIM**: Song et al. (2021) - "Denoising Diffusion Implicit Models"
    - arXiv: 2010.02502
+   - Enables 10-20x faster inference through deterministic sampling
+
+### Future Work
 
 4. **Flow Matching**: Lipman et al. (2023) - "Flow Matching for Generative Modeling"
    - arXiv: 2210.02747
@@ -191,7 +267,7 @@ Where `z ~ N(0, I)` is random noise (except at t=0)
 
 ## Roadmap
 
-### Phase 1 (Current) ✓
+### Phase 1 (Complete) ✅
 - [x] Base architecture and abstractions
 - [x] DDPM implementation
 - [x] Linear and cosine schedules
@@ -199,19 +275,20 @@ Where `z ~ N(0, I)` is random noise (except at t=0)
 - [x] Time embeddings
 - [x] Base diffusion trainer
 
-### Phase 2 (Next)
-- [ ] DDIM for faster sampling
-- [ ] Sigmoid noise schedule
-- [ ] Cross-attention conditioning
-- [ ] Enhanced network architecture with time embedding injection
-- [ ] Sampling/inference utilities
+### Phase 2 (Complete) ✅
+- [x] DDIM for faster sampling (10-20x speedup)
+- [x] Sigmoid noise schedule
+- [x] Sampling utilities (multiple strategies)
+- [x] Progressive and interpolated sampling
+- [x] Enhanced trainer with DDIM support
 
 ### Phase 3 (Future)
 - [ ] Flow matching strategy
 - [ ] Brownian bridge for I2I translation
-- [ ] Advanced conditioning methods
+- [ ] Advanced conditioning methods (if needed)
 - [ ] Multi-resolution diffusion
 - [ ] Classifier-free guidance
+- [ ] Network architecture modifications for time embedding injection
 
 ## Visualizations
 

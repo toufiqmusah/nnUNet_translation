@@ -70,6 +70,13 @@ class nnUNetDiffusionTrainer(nnUNetTrainer):
                 num_timesteps=self.num_timesteps,
                 beta_schedule=self.beta_schedule
             )
+        elif self.diffusion_strategy_name == 'ddim':
+            from .schedulers.ddim import DDIMStrategy
+            return DDIMStrategy(
+                num_timesteps=self.num_timesteps,
+                beta_schedule=self.beta_schedule,
+                eta=0.0  # Deterministic by default
+            )
         else:
             raise ValueError(f"Unknown diffusion strategy: {self.diffusion_strategy_name}")
     

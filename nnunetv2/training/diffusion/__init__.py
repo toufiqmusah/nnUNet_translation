@@ -1,5 +1,6 @@
 from .base_diffusion_strategy import DiffusionStrategy
 from .schedulers.ddpm import DDPMStrategy
+from .schedulers.ddim import DDIMStrategy
 
 # Lazy import for trainer to avoid dependency issues
 def __getattr__(name):
@@ -12,4 +13,5 @@ __all__ = [
     'DiffusionStrategy',
     'nnUNetDiffusionTrainer', 
     'DDPMStrategy',
+    'DDIMStrategy',
 ]
