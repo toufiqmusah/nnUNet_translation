@@ -1,5 +1,5 @@
 import torch
-from .base_conditioning import ConditioningMethod
+from .conditioning_base import ConditioningMethod
 
 
 class ConcatConditioning(ConditioningMethod):

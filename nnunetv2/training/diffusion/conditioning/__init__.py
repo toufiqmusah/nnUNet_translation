@@ -1,4 +1,4 @@
-from .base_conditioning import ConditioningMethod
+from .conditioning_base import ConditioningMethod
 from .concat_conditioning import ConcatConditioning
 
 # Lazy import for cross-attention to allow future implementation
