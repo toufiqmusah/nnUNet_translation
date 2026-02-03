@@ -7,8 +7,8 @@ Successfully implemented the foundational architecture for the nn-diffusion fram
 ## Files Created (22 total)
 
 ### Core Framework
-1. `base_diffusion_strategy.py` - Abstract base class defining the interface for all diffusion strategies
-2. `base_diffusion_trainer.py` - Base trainer extending nnUNetTrainer with diffusion-specific training logic
+1. `diffusion_strategy.py` - Abstract base class defining the interface for all diffusion strategies
+2. `nnUNetTrainer/nnUNetDiffusionTrainer.py` - Trainer extending nnUNetTrainer with diffusion-specific training logic (moved to correct location)
 
 ### Diffusion Strategies
 3. `schedulers/ddpm.py` - Complete DDPM implementation with forward/reverse processes
@@ -22,7 +22,7 @@ Successfully implemented the foundational architecture for the nn-diffusion fram
 9. `noise_schedulers/sigmoid.py` - Placeholder for Phase 2
 
 ### Conditioning Methods
-10. `conditioning/base_conditioning.py` - Abstract base for conditioning strategies
+10. `conditioning/conditioning_base.py` - Abstract base for conditioning strategies
 11. `conditioning/concat_conditioning.py` - Channel-wise concatenation conditioning
 12. `conditioning/cross_attention_conditioning.py` - Placeholder for Phase 2/3
 

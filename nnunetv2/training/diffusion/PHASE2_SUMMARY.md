@@ -35,7 +35,7 @@ Successfully implemented Phase 2 enhancements for the nn-diffusion framework, fo
 5. **`noise_schedulers/__init__.py`** - Added sigmoid_beta_schedule export
 6. **`utils/__init__.py`** - Added sampling function exports
 7. **`__init__.py`** (main) - Added DDIMStrategy to main exports
-8. **`base_diffusion_trainer.py`** - Added DDIM support to trainer
+8. **`nnUNetTrainer/nnUNetDiffusionTrainer.py`** - Added DDIM support to trainer (now in correct location)
 
 ### Documentation & Testing
 

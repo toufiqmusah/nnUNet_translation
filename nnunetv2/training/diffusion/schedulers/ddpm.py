@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from ..base_diffusion_strategy import DiffusionStrategy
+from ..diffusion_strategy import DiffusionStrategy
 
 
 class DDPMStrategy(DiffusionStrategy):

@@ -9,27 +9,33 @@ The nn-diffusion framework provides a plug-and-play diffusion-based architecture
 The framework is organized into modular components:
 
 ```
-nnunetv2/training/diffusion/
-├── base_diffusion_strategy.py      # Abstract base for diffusion strategies
-├── base_diffusion_trainer.py       # Base trainer extending nnUNetTrainer
-├── schedulers/                      # Different diffusion strategies
-│   ├── ddpm.py                      # ✓ DDPM implementation
-│   ├── ddim.py                      # ✓ DDIM implementation (Phase 2)
-│   ├── flow_matching.py             # TODO: Phase 3
-│   └── brownian_bridge.py           # TODO: Phase 3
-├── noise_schedulers/                # Beta/noise schedules
-│   ├── linear.py                    # ✓ Linear schedule
-│   ├── cosine.py                    # ✓ Cosine schedule
-│   └── sigmoid.py                   # ✓ Sigmoid schedule (Phase 2)
-├── conditioning/                    # Conditioning methods
-│   ├── base_conditioning.py         # Abstract base
-│   ├── concat_conditioning.py       # ✓ Channel concatenation
-│   └── cross_attention_conditioning.py  # TODO: Future
-└── utils/                           # Utility functions
-    ├── time_embedding.py            # ✓ Sinusoidal embeddings
-    ├── helpers.py                   # ✓ Helper functions
-    └── sampling.py                  # ✓ Sampling utilities (Phase 2)
+nnunetv2/training/
+├── nnUNetTrainer/
+│   ├── nnUNetTrainer.py                 # Base trainer
+│   └── nnUNetDiffusionTrainer.py        # Diffusion trainer
+│
+└── diffusion/                           # Diffusion framework
+    ├── diffusion_strategy.py            # Abstract base for diffusion strategies
+    ├── schedulers/                      # Different diffusion strategies
+    │   ├── ddpm.py                      # ✓ DDPM implementation
+    │   ├── ddim.py                      # ✓ DDIM implementation (Phase 2)
+    │   ├── flow_matching.py             # TODO: Phase 3
+    │   └── brownian_bridge.py           # TODO: Phase 3
+    ├── noise_schedulers/                # Beta/noise schedules
+    │   ├── linear.py                    # ✓ Linear schedule
+    │   ├── cosine.py                    # ✓ Cosine schedule
+    │   └── sigmoid.py                   # ✓ Sigmoid schedule (Phase 2)
+    ├── conditioning/                    # Conditioning methods
+    │   ├── conditioning_base.py         # Abstract base
+    │   ├── concat_conditioning.py       # ✓ Channel concatenation
+    │   └── cross_attention_conditioning.py  # TODO: Future
+    └── utils/                           # Utility functions
+        ├── time_embedding.py            # ✓ Sinusoidal embeddings
+        ├── helpers.py                   # ✓ Helper functions
+        └── sampling.py                  # ✓ Sampling utilities (Phase 2)
 ```
+
+**Note**: The `nnUNetDiffusionTrainer` is located in `nnunetv2/training/nnUNetTrainer/` to follow nnUNet's trainer discovery convention.
 
 ## Key Components
 
@@ -82,18 +88,20 @@ How source information is provided to the model:
 ### Basic Training Example
 
 ```python
-from nnunetv2.training.diffusion import nnUNetDiffusionTrainer
+from nnunetv2.training.nnUNetTrainer.nnUNetDiffusionTrainer import nnUNetDiffusionTrainer
 
 # Create trainer with DDPM strategy
 trainer = nnUNetDiffusionTrainer(
     plans=plans,
     configuration=configuration,
     fold=fold,
-    dataset_json=dataset_json,
-    diffusion_strategy='ddpm',
-    num_timesteps=1000,
-    beta_schedule='linear'
+    dataset_json=dataset_json
 )
+
+# Configure diffusion parameters (optional, defaults shown)
+trainer.diffusion_strategy_name = 'ddpm'
+trainer.num_timesteps = 1000
+trainer.beta_schedule = 'linear'
 
 # Initialize and train
 trainer.initialize()

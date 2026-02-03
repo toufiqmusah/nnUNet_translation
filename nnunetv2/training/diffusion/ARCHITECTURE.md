@@ -7,35 +7,42 @@ The nn-diffusion framework is built on a modular, extensible architecture that a
 ## Directory Structure
 
 ```
-nnunetv2/training/diffusion/
-├── __init__.py                          # Main exports
-├── base_diffusion_strategy.py           # Abstract strategy interface
-├── base_diffusion_trainer.py            # Main trainer class
+nnunetv2/training/
+├── nnUNetTrainer/
+│   ├── nnUNetTrainer.py                 # Base trainer
+│   ├── nnUNetDiffusionTrainer.py        # Diffusion trainer (NEW LOCATION)
+│   └── variants/                        # Other trainer variants
 │
-├── schedulers/                          # Diffusion strategies
-│   ├── __init__.py
-│   ├── ddpm.py                          # DDPM implementation
-│   ├── ddim.py                          # DDIM (Phase 2)
-│   ├── flow_matching.py                 # Flow Matching (Phase 2)
-│   └── brownian_bridge.py               # Brownian Bridge (Phase 2)
-│
-├── noise_schedulers/                    # Beta schedules
-│   ├── __init__.py
-│   ├── linear.py                        # Linear schedule
-│   ├── cosine.py                        # Cosine schedule
-│   └── sigmoid.py                       # Sigmoid schedule (Phase 2)
-│
-├── conditioning/                        # Conditioning methods
-│   ├── __init__.py
-│   ├── base_conditioning.py             # Abstract interface
-│   ├── concat_conditioning.py           # Channel concatenation
-│   └── cross_attention_conditioning.py  # Cross-attention (Phase 3)
-│
-└── utils/                               # Utilities
-    ├── __init__.py
-    ├── time_embedding.py                # Time embeddings
-    └── helpers.py                       # Helper functions
+└── diffusion/                           # Diffusion framework
+    ├── __init__.py                      # Framework exports
+    ├── diffusion_strategy.py            # Abstract strategy interface (renamed)
+    │
+    ├── schedulers/                      # Diffusion strategies
+    │   ├── __init__.py
+    │   ├── ddpm.py                      # DDPM implementation
+    │   ├── ddim.py                      # DDIM (Phase 2)
+    │   ├── flow_matching.py             # Flow Matching (Phase 2)
+    │   └── brownian_bridge.py           # Brownian Bridge (Phase 2)
+    │
+    ├── noise_schedulers/                # Beta schedules
+    │   ├── __init__.py
+    │   ├── linear.py                    # Linear schedule
+    │   ├── cosine.py                    # Cosine schedule
+    │   └── sigmoid.py                   # Sigmoid schedule (Phase 2)
+    │
+    ├── conditioning/                    # Conditioning methods
+    │   ├── __init__.py
+    │   ├── conditioning_base.py         # Abstract interface (renamed)
+    │   ├── concat_conditioning.py       # Channel concatenation
+    │   └── cross_attention_conditioning.py  # Cross-attention (Phase 3)
+    │
+    └── utils/                           # Utilities
+        ├── __init__.py
+        ├── time_embedding.py            # Time embeddings
+        └── helpers.py                   # Helper functions
 ```
+
+**Note**: The `nnUNetDiffusionTrainer` is now located in `nnunetv2/training/nnUNetTrainer/` to follow nnUNet's trainer discovery convention. All trainers must be in this directory to be discoverable by `nnUNetv2_train`.
 
 ## Core Components
 

@@ -1,0 +1,223 @@
+import torch
+from torch import autocast
+from typing import Union, Tuple, List
+import numpy as np
+
+from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
+from nnunetv2.training.diffusion.diffusion_strategy import DiffusionStrategy
+from nnunetv2.training.diffusion.schedulers.ddpm import DDPMStrategy
+from nnunetv2.training.diffusion.conditioning.concat_conditioning import ConcatConditioning
+from nnunetv2.training.diffusion.utils.time_embedding import SinusoidalTimeEmbedding, TimeEmbeddingMLP
+from nnunetv2.utilities.collate_outputs import collate_outputs
+from nnunetv2.utilities.helpers import dummy_context
+
+
+class nnUNetDiffusionTrainer(nnUNetTrainer):
+    """
+    Diffusion-based trainer for image-to-image translation.
+    
+    This trainer extends nnUNetTrainer to support diffusion models (DDPM, DDIM, Flow Matching, etc.)
+    for medical image translation tasks like MR-to-CT synthesis.
+    
+    Usage:
+        nnUNetv2_train <dataset> 3d_fullres <fold> -tr nnUNetDiffusionTrainer -pl nnResUNetPlans
+    
+    Key differences from standard nnUNetTrainer:
+    - Uses diffusion forward/reverse processes
+    - Incorporates time embeddings
+    - Supports multiple diffusion strategies (DDPM, DDIM, etc.)
+    - Conditioning on source images for image-to-image translation
+    """
+    
+    def __init__(
+        self,
+        plans: dict,
+        configuration: str,
+        fold: int,
+        dataset_json: dict,
+        unpack_dataset: bool = True,
+        device: torch.device = torch.device("cuda"),
+    ):
+        super().__init__(plans, configuration, fold, dataset_json, unpack_dataset, device)
+        
+        # Diffusion-specific settings (can be overridden)
+        self.diffusion_strategy_name = 'ddpm'  # Default strategy
+        self.num_timesteps = 1000
+        self.beta_schedule = 'linear'
+        
+        # Will be initialized in initialize()
+        self.diffusion_strategy = None
+        self.time_embedder = None
+        self.time_mlp = None
+        self.conditioning_method = None
+        
+        # Override some defaults for diffusion training
+        self.enable_deep_supervision = False
+        self.num_epochs = 500  # Diffusion typically needs fewer epochs
+        self.initial_lr = 1e-4  # Slightly lower LR for stability
+    
+    def initialize(self):
+        """Initialize trainer with diffusion-specific components"""
+        # Call parent initialization first
+        super().initialize()
+        
+        # Initialize diffusion strategy
+        self.print_to_log_file(f"Initializing diffusion strategy: {self.diffusion_strategy_name}")
+        self.diffusion_strategy = self._build_diffusion_strategy()
+        
+        # Move diffusion parameters to device
+        if hasattr(self.diffusion_strategy, 'betas'):
+            self.diffusion_strategy.betas = self.diffusion_strategy.betas.to(self.device)
+        if hasattr(self.diffusion_strategy, 'alphas_cumprod'):
+            self.diffusion_strategy.alphas_cumprod = self.diffusion_strategy.alphas_cumprod.to(self.device)
+        if hasattr(self.diffusion_strategy, 'sqrt_alphas_cumprod'):
+            self.diffusion_strategy.sqrt_alphas_cumprod = self.diffusion_strategy.sqrt_alphas_cumprod.to(self.device)
+        if hasattr(self.diffusion_strategy, 'sqrt_one_minus_alphas_cumprod'):
+            self.diffusion_strategy.sqrt_one_minus_alphas_cumprod = self.diffusion_strategy.sqrt_one_minus_alphas_cumprod.to(self.device)
+        if hasattr(self.diffusion_strategy, 'posterior_variance'):
+            self.diffusion_strategy.posterior_variance = self.diffusion_strategy.posterior_variance.to(self.device)
+        if hasattr(self.diffusion_strategy, 'posterior_mean_coef1'):
+            self.diffusion_strategy.posterior_mean_coef1 = self.diffusion_strategy.posterior_mean_coef1.to(self.device)
+        if hasattr(self.diffusion_strategy, 'posterior_mean_coef2'):
+            self.diffusion_strategy.posterior_mean_coef2 = self.diffusion_strategy.posterior_mean_coef2.to(self.device)
+        
+        # Initialize time embeddings
+        time_embed_dim = 256
+        self.time_embedder = SinusoidalTimeEmbedding(time_embed_dim).to(self.device)
+        self.time_mlp = TimeEmbeddingMLP(time_embed_dim).to(self.device)
+        
+        # Initialize conditioning
+        self.conditioning_method = ConcatConditioning()
+        
+        self.print_to_log_file(f"Diffusion training initialized:")
+        self.print_to_log_file(f"  Strategy: {self.diffusion_strategy_name}")
+        self.print_to_log_file(f"  Timesteps: {self.num_timesteps}")
+        self.print_to_log_file(f"  Beta schedule: {self.beta_schedule}")
+        self.print_to_log_file(f"  Time embedding dim: {time_embed_dim}")
+    
+    def _build_diffusion_strategy(self) -> DiffusionStrategy:
+        """Build the diffusion strategy based on configuration"""
+        if self.diffusion_strategy_name == 'ddpm':
+            return DDPMStrategy(
+                num_timesteps=self.num_timesteps,
+                beta_schedule=self.beta_schedule
+            )
+        elif self.diffusion_strategy_name == 'ddim':
+            from nnunetv2.training.diffusion.schedulers.ddim import DDIMStrategy
+            return DDIMStrategy(
+                num_timesteps=self.num_timesteps,
+                beta_schedule=self.beta_schedule,
+                eta=0.0  # Deterministic by default
+            )
+        else:
+            raise ValueError(f"Unknown diffusion strategy: {self.diffusion_strategy_name}. "
+                           f"Currently supported: ['ddpm', 'ddim']")
+    
+    def train_step(self, batch: dict) -> dict:
+        """
+        Diffusion training step.
+        
+        Process:
+        1. Get source (condition) and target images
+        2. Sample random timesteps
+        3. Add noise to target (forward diffusion)
+        4. Condition on source image
+        5. Predict noise (or other target based on strategy)
+        6. Compute loss
+        """
+        data = batch['data']  # Source image (e.g., MR)
+        target = batch['target']  # Target image (e.g., CT)
+        
+        # Move to device
+        data = data.to(self.device, non_blocking=True)
+        if isinstance(target, list):
+            target = target[0].to(self.device, non_blocking=True)
+        else:
+            target = target.to(self.device, non_blocking=True)
+        
+        self.optimizer.zero_grad(set_to_none=True)
+        
+        with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
+            batch_size = target.shape[0]
+            
+            # Sample random timesteps for each image in batch
+            t = torch.randint(0, self.num_timesteps, (batch_size,), device=self.device).long()
+            
+            # Sample noise
+            noise = torch.randn_like(target)
+            
+            # Forward diffusion: add noise to target
+            x_t = self.diffusion_strategy.forward_process(target, t, noise)
+            
+            # Prepare conditioning from source
+            conditioning = self.conditioning_method.prepare_conditioning(data)
+            
+            # Apply conditioning (concatenate source with noisy target)
+            model_input = self.conditioning_method.apply_conditioning(x_t, conditioning)
+            
+            # Get time embeddings (currently not used by network, will be added in Phase 2)
+            # t_emb = self.time_embedder(t)
+            # t_emb = self.time_mlp(t_emb)
+            
+            # Network forward pass
+            # Note: Current network doesn't use time embeddings yet
+            # This will be enhanced when we modify the U-Net architecture
+            model_output = self.network(model_input)
+            
+            # Get training target (for DDPM, this is the noise)
+            training_target = self.diffusion_strategy.get_target(target, noise, t)
+            
+            # Compute loss
+            loss = self.diffusion_strategy.compute_loss(model_output, training_target, t)
+        
+        # Backward pass with gradient scaling
+        if self.grad_scaler is not None:
+            self.grad_scaler.scale(loss).backward()
+            self.grad_scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.network.parameters(), 1.0)
+            self.grad_scaler.step(self.optimizer)
+            self.grad_scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.network.parameters(), 1.0)
+            self.optimizer.step()
+        
+        return {'loss': loss.detach().cpu().numpy()}
+    
+    def validation_step(self, batch: dict) -> dict:
+        """Validation step for diffusion models"""
+        data = batch['data']
+        target = batch['target']
+        
+        data = data.to(self.device, non_blocking=True)
+        if isinstance(target, list):
+            target = target[0].to(self.device, non_blocking=True)
+        else:
+            target = target.to(self.device, non_blocking=True)
+        
+        with torch.no_grad():
+            with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
+                batch_size = target.shape[0]
+                t = torch.randint(0, self.num_timesteps, (batch_size,), device=self.device).long()
+                
+                noise = torch.randn_like(target)
+                x_t = self.diffusion_strategy.forward_process(target, t, noise)
+                
+                conditioning = self.conditioning_method.prepare_conditioning(data)
+                model_input = self.conditioning_method.apply_conditioning(x_t, conditioning)
+                
+                model_output = self.network(model_input)
+                
+                training_target = self.diffusion_strategy.get_target(target, noise, t)
+                loss = self.diffusion_strategy.compute_loss(model_output, training_target, t)
+        
+        return {'loss': loss.detach().cpu().numpy()}
+    
+    def on_validation_epoch_end(self, val_outputs: List[dict]):
+        """Override to handle diffusion-specific validation metrics"""
+        outputs_collated = collate_outputs(val_outputs)
+        
+        loss_here = np.mean(outputs_collated['loss'])
+        
+        self.logger.log('val_loss', loss_here, self.current_epoch)
+        self.print_to_log_file(f"Validation loss: {loss_here:.4f}")
