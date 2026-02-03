@@ -213,15 +213,47 @@ Where `z ~ N(0, I)` is random noise (except at t=0)
 - [ ] Multi-resolution diffusion
 - [ ] Classifier-free guidance
 
+## Visualizations
+
+Run the examples script to generate visualizations:
+
+```bash
+python nnunetv2/training/diffusion/examples.py
+```
+
+This will generate:
+- **Noise schedule comparison**: Shows how linear vs cosine schedules differ
+- **Time embeddings visualization**: Shows how timesteps are encoded
+
+### Noise Schedules
+
+Different noise schedules affect how quickly noise is added during the forward process:
+
+- **Linear schedule**: Simple linear increase in noise from β_start to β_end
+- **Cosine schedule**: More gradual at the beginning, better for high-resolution images
+
+### Time Embeddings
+
+Sinusoidal time embeddings encode timestep information for the model, allowing it to know what timestep it's processing and adjust its denoising accordingly.
+
 ## Testing
 
-The framework includes basic validation:
+The framework includes comprehensive validation:
+
+```bash
+# Run validation tests
+python nnunetv2/training/diffusion/validate_phase1.py
+
+# Run examples
+python nnunetv2/training/diffusion/examples.py
+```
+
+Example code:
 
 ```python
 # Test imports
 from nnunetv2.training.diffusion import (
     DiffusionStrategy,
-    nnUNetDiffusionTrainer,
     DDPMStrategy
 )
 
