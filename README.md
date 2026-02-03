@@ -55,3 +55,73 @@ nnUNetv2_predict -d DatasetY -i INPUT -o OUTPUT -c 3d_fullres -p nnResUNetPlans 
 - --rec allows selecting the reconstruction method for overlapping patches (```mean```or ```median```).
 The ```median``` is still experimental and currently RAM-intensive.
 
+---
+
+## 🆕 Diffusion Framework (nn-diffusion)
+
+This repository now includes a modular diffusion framework for image-to-image translation with swappable training methods!
+
+### Available Diffusion Methods
+
+- ✅ **DDPM** (Denoising Diffusion Probabilistic Models) - Fully implemented
+- 🔄 **DDIM** (Denoising Diffusion Implicit Models) - Coming in Phase 2
+- 🔄 **Flow Matching** - Coming in Phase 2
+- 🔄 **Brownian Bridge** - Coming in Phase 2
+
+### Quick Start with Diffusion
+
+#### Training with DDPM
+```bash
+# Basic DDPM training
+nnUNetv2_train DatasetY 3d_fullres 0 \
+  -tr nnUNetDiffusionTrainer \
+  -pl nnResUNetPlans
+
+# DDPM with cosine schedule (recommended for high-res images)
+nnUNetv2_train DatasetY 3d_fullres 0 \
+  -tr nnUNetDiffusionTrainer \
+  -pl nnResUNetPlans \
+  --beta_schedule cosine
+
+# DDPM with custom timesteps
+nnUNetv2_train DatasetY 3d_fullres 0 \
+  -tr nnUNetDiffusionTrainer \
+  -pl nnResUNetPlans \
+  --num_timesteps 500
+```
+
+#### Inference with Diffusion Models
+```bash
+nnUNetv2_predict_diffusion -d DatasetY \
+  -i INPUT -o OUTPUT \
+  -c 3d_fullres \
+  -p nnResUNetPlans \
+  -tr nnUNetDiffusionTrainer \
+  -f FOLD \
+  --sampling_steps 50  # Use fewer steps for faster inference
+```
+
+### Comparison: Deterministic vs Diffusion
+
+| Method | Training Time | Inference Time | Image Quality | Diversity |
+|--------|--------------|----------------|---------------|-----------|
+| **L1/MAE** (Deterministic) | Fast | Very Fast | Good | None |
+| **AFP** (Deterministic) | Medium | Very Fast | Better | None |
+| **DDPM** (Diffusion) | Slower | Slow | Best | High |
+
+### When to Use Diffusion Models
+
+**Use Diffusion when:**
+- You need high-quality, detailed image translation
+- You want to generate multiple diverse outputs
+- You have sufficient computational resources
+- You're working with complex modality translations
+
+**Use Deterministic (L1/AFP) when:**
+- You need fast inference
+- You want deterministic outputs
+- You have limited computational resources
+- You need real-time processing
+
+For detailed usage, see [DIFFUSION_GUIDE.md](documentation/DIFFUSION_GUIDE.md)
+
