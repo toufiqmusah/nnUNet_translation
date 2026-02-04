@@ -135,7 +135,7 @@ class nnUNetDiffusionTrainer(nnUNetTrainer):
             
             self.was_initialized = True
         else:
-            raise RuntimeError("You have called self.initialize even though the trainer was already initialized.")
+            raise RuntimeError("Trainer has already been initialized. If you need to re-initialize, please create a new trainer instance.")
     
     def _move_diffusion_params_to_device(self):
         """Move all diffusion strategy tensors to the correct device"""
