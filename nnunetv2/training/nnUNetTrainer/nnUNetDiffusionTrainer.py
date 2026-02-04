@@ -3,6 +3,9 @@ from torch import autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from typing import Union, Tuple, List
 import numpy as np
+import json
+from time import time
+from batchgenerators.utilities.file_and_folder_operations import join
 
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 from nnunetv2.training.diffusion.diffusion_strategy import DiffusionStrategy
@@ -160,6 +163,20 @@ class nnUNetDiffusionTrainer(nnUNetTrainer):
         if hasattr(self.diffusion_strategy, 'posterior_mean_coef2'):
             self.diffusion_strategy.posterior_mean_coef2 = self.diffusion_strategy.posterior_mean_coef2.to(self.device)
     
+    def on_train_start(self):
+        """Initialize training - called before first epoch"""
+        # Call parent implementation
+        super().on_train_start()
+        
+        # Initialize manual loss tracking (simpler than logger)
+        self.train_losses = []
+        self.validation_losses = []
+        self._best_ema = None
+        
+        self.print_to_log_file("Diffusion training started")
+        self.print_to_log_file(f"Training with {self.diffusion_strategy_name} strategy")
+        self.print_to_log_file(f"Total epochs: {self.num_epochs}")
+    
     def _build_loss(self):
         """
         Build loss for diffusion training.
@@ -292,11 +309,65 @@ class nnUNetDiffusionTrainer(nnUNetTrainer):
         
         return {'loss': loss.detach().cpu().numpy()}
     
+    def on_train_epoch_end(self, train_outputs: List[dict]):
+        """Log training epoch statistics"""
+        outputs_collated = collate_outputs(train_outputs)
+        train_loss = np.mean(outputs_collated['loss'])
+        
+        self.train_losses.append(train_loss)
+        
+        self.print_to_log_file(f"Epoch {self.current_epoch} - Training loss: {train_loss:.6f}")
+    
     def on_validation_epoch_end(self, val_outputs: List[dict]):
-        """Override to handle diffusion-specific validation metrics"""
+        """Handle validation epoch end"""
         outputs_collated = collate_outputs(val_outputs)
+        val_loss = np.mean(outputs_collated['loss'])
         
-        loss_here = np.mean(outputs_collated['loss'])
+        self.validation_losses.append(val_loss)
         
-        self.logger.log('val_loss', loss_here, self.current_epoch)
-        self.print_to_log_file(f"Validation loss: {loss_here:.4f}")
+        self.print_to_log_file(f"Epoch {self.current_epoch} - Validation loss: {val_loss:.6f}")
+        
+        # Update EMA for checkpoint selection
+        if self._best_ema is None:
+            self._best_ema = val_loss
+        else:
+            self._best_ema = 0.9 * self._best_ema + 0.1 * val_loss
+        
+        self.print_to_log_file(f"Best EMA: {self._best_ema:.6f}")
+    
+    def on_epoch_end(self):
+        """
+        Called at the end of each epoch.
+        Handle checkpointing and logging.
+        """
+        self.logger.log('epoch_end_timestamps', time(), self.current_epoch)
+        
+        # Save checkpoint periodically
+        if (self.current_epoch + 1) % self.save_every == 0:
+            self.save_checkpoint(join(self.output_folder, 'checkpoint_latest.pth'))
+        
+        # Save best checkpoint if this is the best so far
+        if self._best_ema is not None:
+            current_val_loss = self.validation_losses[-1] if self.validation_losses else float('inf')
+            if current_val_loss <= self._best_ema:
+                self.save_checkpoint(join(self.output_folder, 'checkpoint_best.pth'))
+                self.print_to_log_file(f"Saved new best checkpoint with val loss: {current_val_loss:.6f}")
+        
+        # Continue with standard nnUNet epoch end behavior
+        self.print_to_log_file(f"Epoch {self.current_epoch} completed\n")
+    
+    def on_train_end(self):
+        """Called when training finishes"""
+        # Save loss history
+        loss_dict = {
+            'train_losses': self.train_losses,
+            'validation_losses': self.validation_losses,
+        }
+        
+        with open(join(self.output_folder, 'diffusion_loss_history.json'), 'w') as f:
+            json.dump(loss_dict, f, indent=2)
+        
+        self.print_to_log_file("Training completed!")
+        self.print_to_log_file(f"Final training loss: {self.train_losses[-1]:.6f}")
+        self.print_to_log_file(f"Final validation loss: {self.validation_losses[-1]:.6f}")
+        self.print_to_log_file(f"Best EMA: {self._best_ema:.6f}")
