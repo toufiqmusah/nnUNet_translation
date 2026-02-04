@@ -172,6 +172,7 @@ class nnUNetDiffusionTrainer(nnUNetTrainer):
         self.train_losses = []
         self.validation_losses = []
         self._best_ema = None
+        self._best_val_loss = None  # Track best individual validation loss for checkpoints
         
         self.print_to_log_file("Diffusion training started")
         self.print_to_log_file(f"Training with {self.diffusion_strategy_name} strategy")
@@ -327,13 +328,18 @@ class nnUNetDiffusionTrainer(nnUNetTrainer):
         
         self.print_to_log_file(f"Epoch {self.current_epoch} - Validation loss: {val_loss:.6f}")
         
-        # Update EMA for checkpoint selection
+        # Update EMA for logging/monitoring
         if self._best_ema is None:
             self._best_ema = val_loss
         else:
             self._best_ema = 0.9 * self._best_ema + 0.1 * val_loss
         
+        # Track best individual validation loss for checkpoint selection
+        if self._best_val_loss is None or val_loss < self._best_val_loss:
+            self._best_val_loss = val_loss
+        
         self.print_to_log_file(f"Best EMA: {self._best_ema:.6f}")
+        self.print_to_log_file(f"Best validation loss: {self._best_val_loss:.6f}")
     
     def on_epoch_end(self):
         """
@@ -346,10 +352,10 @@ class nnUNetDiffusionTrainer(nnUNetTrainer):
         if (self.current_epoch + 1) % self.save_every == 0:
             self.save_checkpoint(join(self.output_folder, 'checkpoint_latest.pth'))
         
-        # Save best checkpoint if this is the best so far
-        if self._best_ema is not None:
-            current_val_loss = self.validation_losses[-1] if self.validation_losses else float('inf')
-            if current_val_loss <= self._best_ema:
+        # Save best checkpoint based on best individual validation loss
+        if self._best_val_loss is not None and self.validation_losses:
+            current_val_loss = self.validation_losses[-1]
+            if current_val_loss == self._best_val_loss:
                 self.save_checkpoint(join(self.output_folder, 'checkpoint_best.pth'))
                 self.print_to_log_file(f"Saved new best checkpoint with val loss: {current_val_loss:.6f}")
         
@@ -368,6 +374,13 @@ class nnUNetDiffusionTrainer(nnUNetTrainer):
             json.dump(loss_dict, f, indent=2)
         
         self.print_to_log_file("Training completed!")
-        self.print_to_log_file(f"Final training loss: {self.train_losses[-1]:.6f}")
-        self.print_to_log_file(f"Final validation loss: {self.validation_losses[-1]:.6f}")
-        self.print_to_log_file(f"Best EMA: {self._best_ema:.6f}")
+        
+        # Only log final losses if we have data
+        if self.train_losses:
+            self.print_to_log_file(f"Final training loss: {self.train_losses[-1]:.6f}")
+        if self.validation_losses:
+            self.print_to_log_file(f"Final validation loss: {self.validation_losses[-1]:.6f}")
+        if self._best_ema is not None:
+            self.print_to_log_file(f"Best EMA: {self._best_ema:.6f}")
+        if self._best_val_loss is not None:
+            self.print_to_log_file(f"Best validation loss: {self._best_val_loss:.6f}")
