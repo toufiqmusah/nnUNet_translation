@@ -1,5 +1,6 @@
 import torch
 from torch import autocast
+from torch.nn.parallel import DistributedDataParallel as DDP
 from typing import Union, Tuple, List
 import numpy as np
 
@@ -10,6 +11,7 @@ from nnunetv2.training.diffusion.conditioning.concat_conditioning import ConcatC
 from nnunetv2.training.diffusion.utils.time_embedding import SinusoidalTimeEmbedding, TimeEmbeddingMLP
 from nnunetv2.utilities.collate_outputs import collate_outputs
 from nnunetv2.utilities.helpers import dummy_context
+from nnunetv2.utilities.label_handling.label_handling import determine_num_input_channels
 
 
 class nnUNetDiffusionTrainer(nnUNetTrainer):
@@ -19,8 +21,17 @@ class nnUNetDiffusionTrainer(nnUNetTrainer):
     This trainer extends nnUNetTrainer to support diffusion models (DDPM, DDIM, Flow Matching, etc.)
     for medical image translation tasks like MR-to-CT synthesis.
     
+    Key Architecture Details:
+    - Network input: Concatenation of [noisy_target, source_image]
+    - If source has N channels, network input has 2N channels
+    - Output: Predicted noise (for DDPM) or other target based on strategy
+    - Conditioning: Source image guides the denoising process
+    
     Usage:
         nnUNetv2_train <dataset> 3d_fullres <fold> -tr nnUNetDiffusionTrainer -pl nnResUNetPlans
+    
+    Example:
+        nnUNetv2_train 101 3d_fullres 0 -tr nnUNetDiffusionTrainer -pl nnResUNetPlans
     
     Key differences from standard nnUNetTrainer:
     - Uses diffusion forward/reverse processes
@@ -58,42 +69,105 @@ class nnUNetDiffusionTrainer(nnUNetTrainer):
     
     def initialize(self):
         """Initialize trainer with diffusion-specific components"""
-        # Call parent initialization first
-        super().initialize()
-        
-        # Initialize diffusion strategy
-        self.print_to_log_file(f"Initializing diffusion strategy: {self.diffusion_strategy_name}")
-        self.diffusion_strategy = self._build_diffusion_strategy()
-        
-        # Move diffusion parameters to device
+        if not self.was_initialized:
+            # Determine base number of input channels from dataset
+            base_num_input_channels = determine_num_input_channels(
+                self.plans_manager, 
+                self.configuration_manager,
+                self.dataset_json
+            )
+            
+            # CRITICAL: For concatenation conditioning, we need to double the input channels
+            # Network receives: concat([noisy_target, source_image], dim=1)
+            # So if source has N channels, concatenated input has 2*N channels
+            self.num_input_channels = base_num_input_channels * 2
+            
+            self.print_to_log_file(f"Base input channels: {base_num_input_channels}")
+            self.print_to_log_file(f"Network input channels (after conditioning): {self.num_input_channels}")
+            
+            # Build network with doubled input channels
+            self.network = self.build_network_architecture(
+                self.configuration_manager.network_arch_class_name,
+                self.configuration_manager.network_arch_init_kwargs,
+                self.configuration_manager.network_arch_init_kwargs_req_import,
+                self.num_input_channels,  # This is now 2*base
+                self.label_manager.num_segmentation_heads,
+                self.enable_deep_supervision,
+            ).to(self.device)
+            
+            # Compile network if requested
+            if self._do_i_compile():
+                self.print_to_log_file('Using torch.compile...')
+                self.network = torch.compile(self.network)
+
+            # Configure optimizers
+            self.optimizer, self.lr_scheduler = self.configure_optimizers()
+            
+            # DDP wrapper if needed
+            if self.is_ddp:
+                self.network = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.network)
+                self.network = DDP(self.network, device_ids=[self.local_rank])
+
+            # Build loss
+            self.loss = self._build_loss()
+            
+            # Initialize diffusion strategy
+            self.print_to_log_file(f"Initializing diffusion strategy: {self.diffusion_strategy_name}")
+            self.diffusion_strategy = self._build_diffusion_strategy()
+            
+            # Move diffusion parameters to device
+            self._move_diffusion_params_to_device()
+            
+            # Initialize time embeddings
+            time_embed_dim = 256
+            self.time_embedder = SinusoidalTimeEmbedding(time_embed_dim).to(self.device)
+            self.time_mlp = TimeEmbeddingMLP(time_embed_dim).to(self.device)
+            
+            # Initialize conditioning
+            self.conditioning_method = ConcatConditioning()
+            
+            self.print_to_log_file(f"Diffusion training initialized:")
+            self.print_to_log_file(f"  Strategy: {self.diffusion_strategy_name}")
+            self.print_to_log_file(f"  Timesteps: {self.num_timesteps}")
+            self.print_to_log_file(f"  Beta schedule: {self.beta_schedule}")
+            self.print_to_log_file(f"  Time embedding dim: {time_embed_dim}")
+            self.print_to_log_file(f"  Conditioning: Concatenation (doubles input channels)")
+            
+            self.was_initialized = True
+        else:
+            raise RuntimeError("Trainer has already been initialized. If you need to re-initialize, please create a new trainer instance.")
+    
+    def _move_diffusion_params_to_device(self):
+        """Move all diffusion strategy tensors to the correct device"""
         if hasattr(self.diffusion_strategy, 'betas'):
             self.diffusion_strategy.betas = self.diffusion_strategy.betas.to(self.device)
+        if hasattr(self.diffusion_strategy, 'alphas'):
+            self.diffusion_strategy.alphas = self.diffusion_strategy.alphas.to(self.device)
         if hasattr(self.diffusion_strategy, 'alphas_cumprod'):
             self.diffusion_strategy.alphas_cumprod = self.diffusion_strategy.alphas_cumprod.to(self.device)
+        if hasattr(self.diffusion_strategy, 'alphas_cumprod_prev'):
+            self.diffusion_strategy.alphas_cumprod_prev = self.diffusion_strategy.alphas_cumprod_prev.to(self.device)
         if hasattr(self.diffusion_strategy, 'sqrt_alphas_cumprod'):
             self.diffusion_strategy.sqrt_alphas_cumprod = self.diffusion_strategy.sqrt_alphas_cumprod.to(self.device)
         if hasattr(self.diffusion_strategy, 'sqrt_one_minus_alphas_cumprod'):
             self.diffusion_strategy.sqrt_one_minus_alphas_cumprod = self.diffusion_strategy.sqrt_one_minus_alphas_cumprod.to(self.device)
         if hasattr(self.diffusion_strategy, 'posterior_variance'):
             self.diffusion_strategy.posterior_variance = self.diffusion_strategy.posterior_variance.to(self.device)
+        if hasattr(self.diffusion_strategy, 'posterior_log_variance_clipped'):
+            self.diffusion_strategy.posterior_log_variance_clipped = self.diffusion_strategy.posterior_log_variance_clipped.to(self.device)
         if hasattr(self.diffusion_strategy, 'posterior_mean_coef1'):
             self.diffusion_strategy.posterior_mean_coef1 = self.diffusion_strategy.posterior_mean_coef1.to(self.device)
         if hasattr(self.diffusion_strategy, 'posterior_mean_coef2'):
             self.diffusion_strategy.posterior_mean_coef2 = self.diffusion_strategy.posterior_mean_coef2.to(self.device)
-        
-        # Initialize time embeddings
-        time_embed_dim = 256
-        self.time_embedder = SinusoidalTimeEmbedding(time_embed_dim).to(self.device)
-        self.time_mlp = TimeEmbeddingMLP(time_embed_dim).to(self.device)
-        
-        # Initialize conditioning
-        self.conditioning_method = ConcatConditioning()
-        
-        self.print_to_log_file(f"Diffusion training initialized:")
-        self.print_to_log_file(f"  Strategy: {self.diffusion_strategy_name}")
-        self.print_to_log_file(f"  Timesteps: {self.num_timesteps}")
-        self.print_to_log_file(f"  Beta schedule: {self.beta_schedule}")
-        self.print_to_log_file(f"  Time embedding dim: {time_embed_dim}")
+    
+    def _build_loss(self):
+        """
+        Build loss for diffusion training.
+        Loss is handled by the diffusion strategy, so we return a dummy loss here.
+        """
+        # The actual loss is computed in the diffusion strategy
+        # We don't use the standard segmentation losses
+        return None
     
     def _build_diffusion_strategy(self) -> DiffusionStrategy:
         """Build the diffusion strategy based on configuration"""
@@ -121,7 +195,7 @@ class nnUNetDiffusionTrainer(nnUNetTrainer):
         1. Get source (condition) and target images
         2. Sample random timesteps
         3. Add noise to target (forward diffusion)
-        4. Condition on source image
+        4. Condition on source image via concatenation
         5. Predict noise (or other target based on strategy)
         6. Compute loss
         """
@@ -153,7 +227,12 @@ class nnUNetDiffusionTrainer(nnUNetTrainer):
             conditioning = self.conditioning_method.prepare_conditioning(data)
             
             # Apply conditioning (concatenate source with noisy target)
+            # Shape before: x_t [B, C, H, W, D], conditioning [B, C, H, W, D]
+            # Shape after: model_input [B, 2C, H, W, D]
             model_input = self.conditioning_method.apply_conditioning(x_t, conditioning)
+            
+            # Debug: Uncomment to verify shapes
+            # self.print_to_log_file(f"x_t shape: {x_t.shape}, conditioning shape: {conditioning.shape}, model_input shape: {model_input.shape}")
             
             # Get time embeddings (currently not used by network, will be added in Phase 2)
             # t_emb = self.time_embedder(t)
